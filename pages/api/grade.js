@@ -1,23 +1,38 @@
 export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
 
-  const { scenarioId, prompt, answer } = req.body || {};
+  let { scenarioId, prompt, answer, pasted, cps } = req.body || {};
   if (!answer || !prompt) return res.status(400).json({ error: "Missing prompt/answer" });
 
   const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
   const MODEL = process.env.OPENAI_MODEL || "gpt-4o";
 
-  // Fallback mock if no key
+  // --- baseline result buckets ---
+  let score = 60;
+  let band = "Amber";
+  let reasons = [];
+  let feedback = "Thank you.";
+  const flags = [];
+
+  // --- simple behavior heuristics ---
+  // Paste flag from frontend
+  if (pasted) flags.push("Paste detected");
+  // Very high chars-per-second likely indicates paste (threshold tuned conservatively)
+  if (typeof cps === "number" && cps > 15) flags.push(`Unnatural typing speed (${cps} cps)`);
+
+  // --- if no API key, run mock grading so UI still works ---
   if (!OPENAI_API_KEY) {
-    const score = naiveScore(answer, scenarioId);
-    const band = bandOf(score);
-    return res.json({
-      score, band,
-      reasons: score < 80 ? ["Disclosure Gap"] : [],
-      feedback: score < 80
-        ? "Good start; mention exclusions and waiting period more clearly."
-        : "Nice! Clear and compliant."
-    });
+    score = naiveScore(answer, scenarioId);
+    band = bandOf(score);
+    if (score < 80) {
+      reasons = ["Disclosure Gap"];
+      feedback = "Good start; mention exclusions and waiting period more clearly.";
+    } else {
+      feedback = "Nice! Clear and compliant.";
+    }
+    // apply anti-cheat penalty
+    ({ score, band, reasons, feedback } = applyAntiCheatPenalty({ score, band, reasons, feedback, flags }));
+    return res.json({ score, band, reasons, feedback, flags });
   }
 
   try {
@@ -56,13 +71,15 @@ Agent answer: """${answer}"""`;
 
     const rub = graded.rubric || {};
     const raw = ["accuracy","clarity","empathy","data","nba"].reduce((sum,k)=> sum + (+rub[k]||0), 0);
-    const score = Math.round((raw/10)*100);
-    const band = bandOf(score);
-    const reasons = Array.isArray(graded.reason_codes) ? graded.reason_codes.slice(0,2) : [];
+    score = Math.round((raw/10)*100);
+    band = bandOf(score);
+    reasons = Array.isArray(graded.reason_codes) ? graded.reason_codes.slice(0,2) : [];
+    feedback = graded.feedback || "Thank you.";
 
-    return res.json({
-      score, band, reasons, feedback: graded.feedback || "Thank you."
-    });
+    // apply anti-cheat penalty
+    ({ score, band, reasons, feedback } = applyAntiCheatPenalty({ score, band, reasons, feedback, flags }));
+
+    return res.json({ score, band, reasons, feedback, flags });
 
   } catch (err) {
     console.error(err);
@@ -70,6 +87,7 @@ Agent answer: """${answer}"""`;
   }
 }
 
+// ---------- helpers ----------
 function bandOf(score){
   if (score >= 80) return "Green";
   if (score >= 65) return "Amber";
@@ -77,7 +95,7 @@ function bandOf(score){
 }
 
 function naiveScore(answer, scenarioId){
-  const a = answer.toLowerCase();
+  const a = (answer || "").toLowerCase();
   let s = 60;
   if (scenarioId==="disclosures") {
     if (a.includes("exclusion")) s += 15;
@@ -97,4 +115,16 @@ function naiveScore(answer, scenarioId){
     ["do not","whatsapp","mask","secure","consent","portal"].forEach(k=>{ if(a.includes(k)) s+=4; });
   }
   return Math.max(40, Math.min(95, s));
+}
+
+function applyAntiCheatPenalty({ score, band, reasons, feedback, flags }) {
+  const suspicious = flags.length > 0;
+  if (suspicious) {
+    // cap at Amber, subtract up to 15 points
+    if (score > 70) score = Math.max(55, score - 15);
+    band = bandOf(score);
+    if (!reasons.includes("AI/Copy-Paste Suspicion")) reasons = [...reasons, "AI/Copy-Paste Suspicion"];
+    feedback = (feedback || "Thank you.") + " Note: Your response appears pasted or unnaturally fast. Please answer in your own words.";
+  }
+  return { score, band, reasons, feedback };
 }
