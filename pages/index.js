@@ -57,13 +57,15 @@ export default function Home() {
         <b>Prompt:</b> {prompt}
       </div>
 
-      <textarea
+     <textarea
         placeholder="Type your answer here (2–6 sentences)…"
         value={answer}
         onChange={e => setAnswer(e.target.value)}
+        onPaste={() => alert("Pasting detected! Your answer may be flagged.")}
         rows={7}
         style={{width:"100%", padding:12, fontSize:16}}
       />
+
 
       <div style={{marginTop:12}}>
         <button onClick={onCheck} disabled={loading}
