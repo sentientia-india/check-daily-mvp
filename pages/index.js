@@ -20,11 +20,12 @@ export default function Home() {
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState(null);
 
-  // --- anti-cheat flags ---
+    // --- anti-cheat flags ---
   const [pasted, setPasted] = useState(false);
-  const firstKeyTs = useRef<number | null>(null);
-  const lastKeyTs = useRef<number | null>(null);
+  const firstKeyTs = useRef(null);
+  const lastKeyTs = useRef(null);
   const charCount = useRef(0);
+
 
   function onChangeScenario(e) {
     const id = e.target.value;
