@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useRef } from "react";
 
 const SCENARIOS = [
   { id: "suitability", label: "Suitability / Product Match", prompt:
@@ -20,21 +20,50 @@ export default function Home() {
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState(null);
 
+  // --- anti-cheat flags ---
+  const [pasted, setPasted] = useState(false);
+  const firstKeyTs = useRef<number | null>(null);
+  const lastKeyTs = useRef<number | null>(null);
+  const charCount = useRef(0);
+
   function onChangeScenario(e) {
     const id = e.target.value;
     setScenarioId(id);
     setPrompt(SCENARIOS.find(s => s.id === id).prompt);
+    // reset state
     setAnswer("");
     setResult(null);
+    setPasted(false);
+    firstKeyTs.current = null;
+    lastKeyTs.current = null;
+    charCount.current = 0;
+  }
+
+  // track simple typing speed signal
+  function handleTyping(e) {
+    const val = e.target.value;
+    setAnswer(val);
+    const now = Date.now();
+    if (firstKeyTs.current === null && val.length > 0) firstKeyTs.current = now;
+    lastKeyTs.current = now;
+    charCount.current = val.length;
   }
 
   async function onCheck() {
     if (!answer.trim()) { alert("Please type your answer first."); return; }
+
+    // compute naive chars-per-second (only if user typed anything)
+    let cps = null;
+    if (firstKeyTs.current && lastKeyTs.current && charCount.current > 0) {
+      const secs = Math.max(1, (lastKeyTs.current - firstKeyTs.current) / 1000);
+      cps = Math.round(charCount.current / secs); // higher usually means pasted
+    }
+
     setLoading(true); setResult(null);
     const res = await fetch("/api/grade", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ scenarioId, prompt, answer })
+      body: JSON.stringify({ scenarioId, prompt, answer, pasted, cps })
     });
     const data = await res.json();
     setResult(data);
@@ -57,21 +86,21 @@ export default function Home() {
         <b>Prompt:</b> {prompt}
       </div>
 
-     <textarea
+      <textarea
         placeholder="Type your answer here (2–6 sentences)…"
         value={answer}
-        onChange={e => setAnswer(e.target.value)}
-        onPaste={() => alert("Pasting detected! Your answer may be flagged.")}
-        rows={7}
+        onChange={handleTyping}
+        onPaste={() => { setPasted(true); alert("Pasting detected — your answer may be flagged and scored lower."); }}
+        rows={9}
         style={{width:"100%", padding:12, fontSize:16}}
       />
 
-
-      <div style={{marginTop:12}}>
+      <div style={{marginTop:12, display:"flex", gap:8, alignItems:"center"}}>
         <button onClick={onCheck} disabled={loading}
           style={{padding:"10px 16px", fontWeight:600}}>
           {loading ? "Checking..." : "Check me"}
         </button>
+        {pasted && <small style={{color:"#b00020"}}>⚠️ Paste detected</small>}
       </div>
 
       {result && (
@@ -82,13 +111,16 @@ export default function Home() {
               {result.band} — {result.score}/100
             </span>
           </div>
+          {result.flags?.length ? (
+            <p style={{marginTop:8, color:"#b00020"}}><b>Flags:</b> {result.flags.join(", ")}</p>
+          ) : null}
           <p style={{marginTop:8}}><b>Feedback:</b> {result.feedback}</p>
           <p style={{marginTop:8}}><b>Reason Codes:</b> {result.reasons?.length ? result.reasons.join(", ") : "None"}</p>
         </div>
       )}
 
       <p style={{marginTop:24, color:"#888", fontSize:12}}>
-        Tip: This MVP uses text. Later we can add voice, Hindi, daily digests, and manager dashboards.
+        Tip: Pasting AI text may be flagged. Please answer in your own words.
       </p>
     </div>
   );
